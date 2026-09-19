@@ -17,14 +17,25 @@ builder.Services.AddDbContext<ChatDbContext>(options =>
 
 builder.Services.AddSignalR();
 
+var frontendUrl = Environment.GetEnvironmentVariable("FRONTEND_URL");
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
     {
+        var origins = new List<string>
+        {
+            "http://localhost:5173",
+            "https://localhost:5173"
+        };
+
+        if (!string.IsNullOrWhiteSpace(frontendUrl))
+        {
+            origins.Add(frontendUrl);
+        }
+
         policy
-            .WithOrigins(
-                "http://localhost:5173",
-                "https://localhost:5173")
+            .WithOrigins(origins.ToArray())
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
