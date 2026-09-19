@@ -5,7 +5,7 @@ import {
   LogLevel
 } from "@microsoft/signalr";
 
-const API_BASE = "http://localhost:5180";
+const API_BASE = "https://privatechatstage2.onrender.com";
 const HUB_URL = `${API_BASE}/chatHub`;
 
 function formatTime(value) {
