@@ -4,10 +4,16 @@ using PrivateChat.API.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL");
+
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException(
+        "DATABASE_URL environment variable is not configured.");
+}
+
 builder.Services.AddDbContext<ChatDbContext>(options =>
-    options.UseSqlite(
-        builder.Configuration.GetConnectionString("ChatDatabase")
-        ?? "Data Source=Data/privatechat.db"));
+    options.UseNpgsql(connectionString));
 
 builder.Services.AddSignalR();
 
@@ -28,14 +34,6 @@ builder.Services.AddCors(options =>
 builder.Services.AddControllers();
 
 var app = builder.Build();
-
-Directory.CreateDirectory(Path.Combine(app.Environment.ContentRootPath, "Data"));
-
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<ChatDbContext>();
-    db.Database.EnsureCreated();
-}
 
 app.UseCors("Frontend");
 
