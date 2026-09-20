@@ -1,7 +1,7 @@
 import { openDB } from "idb";
 
 const DB_NAME = "private-chat-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "outbox";
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
@@ -26,12 +26,19 @@ export async function enqueueMessage(message) {
   });
 }
 
-export async function getQueuedMessages() {
+export async function getQueuedMessages(
+  username
+) {
   const db = await dbPromise;
 
-  return db.getAllFromIndex(
+  const messages = await db.getAllFromIndex(
     STORE_NAME,
     "createdAt"
+  );
+
+  return messages.filter(
+    (message) =>
+      message.senderName === username
   );
 }
 
@@ -57,7 +64,9 @@ export async function updateQueuedMessage(
     clientMessageId
   );
 
-  if (!existing) return;
+  if (!existing) {
+    return;
+  }
 
   await db.put(STORE_NAME, {
     ...existing,

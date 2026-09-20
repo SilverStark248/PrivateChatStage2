@@ -55,7 +55,7 @@ export default function App() {
       return;
     }
 
-    const queuedMessages = await getQueuedMessages();
+    const queuedMessages = await getQueuedMessages(username);
 
     for (const queuedMessage of queuedMessages) {
       try {
@@ -137,7 +137,7 @@ export default function App() {
       );
 
       const queuedMessages =
-        await getQueuedMessages();
+        await getQueuedMessages(username);
 
       const localQueuedMessages =
         queuedMessages.map((message) => ({
@@ -388,6 +388,7 @@ export default function App() {
 
     const queuedMessage = {
       clientMessageId,
+      senderName: username,
       text: cleanText
     };
 
