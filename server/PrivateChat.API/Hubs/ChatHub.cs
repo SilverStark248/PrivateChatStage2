@@ -32,9 +32,14 @@ public class ChatHub : Hub
             .ToListAsync();
     }
 
-    public async Task SendMessage(string text)
+    public async Task SendMessage(
+        Guid messageId,
+        string text)
     {
         text = (text ?? string.Empty).Trim();
+
+        if (messageId == Guid.Empty)
+            throw new HubException("Message ID is required.");
 
         if (string.IsNullOrWhiteSpace(text))
             return;
@@ -51,9 +56,19 @@ public class ChatHub : Hub
                 "Authenticated username could not be determined.");
         }
 
+        var existingMessage = await _db.Messages
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x =>
+                x.MessageId == messageId);
+
+        if (existingMessage != null)
+        {
+            return;
+        }
+
         var message = new ChatMessage
         {
-            MessageId = Guid.NewGuid(),
+            MessageId = messageId,
             RoomId = RoomId,
             SenderName = senderName,
             Text = text,
@@ -61,10 +76,28 @@ public class ChatHub : Hub
         };
 
         _db.Messages.Add(message);
-        await _db.SaveChangesAsync();
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            var duplicate = await _db.Messages
+                .AsNoTracking()
+                .AnyAsync(x =>
+                    x.MessageId == messageId);
+
+            if (!duplicate)
+                throw;
+
+            return;
+        }
 
         await Clients.Group(RoomId)
-            .SendAsync("ReceiveMessage", message);
+            .SendAsync(
+                "ReceiveMessage",
+                message);
     }
 
     public override async Task OnConnectedAsync()

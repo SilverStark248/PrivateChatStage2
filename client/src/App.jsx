@@ -5,6 +5,12 @@ import {
   LogLevel
 } from "@microsoft/signalr";
 
+import {
+  enqueueMessage,
+  getQueuedMessages,
+  removeQueuedMessage
+} from "./messageQueue";
+
 const API_BASE = "https://privatechatstage2.onrender.com";
 const HUB_URL = `${API_BASE}/chatHub`;
 
@@ -30,6 +36,38 @@ export default function App() {
   const connectionRef = useRef(null);
   const bottomRef = useRef(null);
 
+  async function flushQueue(connection) {
+    if (
+      !connection ||
+      connection.state !== HubConnectionState.Connected
+    ) {
+      return;
+    }
+
+    const queuedMessages = await getQueuedMessages();
+
+    for (const queuedMessage of queuedMessages) {
+      try {
+        await connection.invoke(
+          "SendMessage",
+          queuedMessage.clientMessageId,
+          queuedMessage.text
+        );
+
+        await removeQueuedMessage(
+          queuedMessage.clientMessageId
+        );
+      } catch (err) {
+        console.error(
+          "Queued message could not be sent:",
+          err
+        );
+
+        break;
+      }
+    }
+  }
+
   useEffect(() => {
     if (!loggedIn || !accessToken) return;
 
@@ -40,7 +78,13 @@ export default function App() {
         .withUrl(HUB_URL, {
           accessTokenFactory: () => accessToken
         })
-        .withAutomaticReconnect([0, 1000, 3000, 5000, 10000])
+        .withAutomaticReconnect([
+          0,
+          1000,
+          3000,
+          5000,
+          10000
+        ])
         .configureLogging(LogLevel.Warning)
         .build();
 
@@ -50,7 +94,9 @@ export default function App() {
 
       connection.onreconnected(async () => {
         setConnectionStatus("Connected");
+
         await loadHistory(connection);
+        await flushQueue(connection);
       });
 
       connection.onclose(() => {
@@ -61,7 +107,8 @@ export default function App() {
         setMessages((current) => {
           if (
             current.some(
-              (item) => item.messageId === message.messageId
+              (item) =>
+                item.messageId === message.messageId
             )
           ) {
             return current;
@@ -81,9 +128,12 @@ export default function App() {
         setConnectionStatus("Connected");
 
         await loadHistory(connection);
+        await flushQueue(connection);
       } catch (err) {
         console.error(err);
+
         setConnectionStatus("Connection failed");
+
         setError(
           "Could not connect to the private chat server."
         );
@@ -117,7 +167,10 @@ export default function App() {
       setMessages(history);
     } catch (err) {
       console.error(err);
-      setError("Could not load message history.");
+
+      setError(
+        "Could not load message history."
+      );
     }
   }
 
@@ -127,7 +180,10 @@ export default function App() {
     const cleanUsername = username.trim();
 
     if (!cleanUsername || !password) {
-      setError("Username and password are required.");
+      setError(
+        "Username and password are required."
+      );
+
       return;
     }
 
@@ -152,12 +208,17 @@ export default function App() {
 
       if (!response.ok) {
         setError(
-          data.message || "Invalid username or password."
+          data.message ||
+            "Invalid username or password."
         );
+
         return;
       }
 
-      setUsername(data.username || cleanUsername);
+      setUsername(
+        data.username || cleanUsername
+      );
+
       setPassword("");
       setAccessToken(data.token);
       setLoggedIn(true);
@@ -195,15 +256,48 @@ export default function App() {
 
     if (!cleanText) return;
 
+    const clientMessageId =
+      crypto.randomUUID();
+
+    const queuedMessage = {
+      clientMessageId,
+      text: cleanText
+    };
+
+    /*
+     * Save locally BEFORE attempting the network send.
+     * This is the key weak-network protection.
+     */
+    try {
+      await enqueueMessage(
+        queuedMessage
+      );
+    } catch (err) {
+      console.error(
+        "Could not save message locally:",
+        err
+      );
+
+      setError(
+        "Could not save the message locally."
+      );
+
+      return;
+    }
+
+    setText("");
+
     const connection = connectionRef.current;
 
     if (
       !connection ||
-      connection.state !== HubConnectionState.Connected
+      connection.state !==
+        HubConnectionState.Connected
     ) {
       setError(
-        "The connection is currently unavailable. Try again in a moment."
+        "You're offline. Your message is safely queued and will be sent when the connection returns."
       );
+
       return;
     }
 
@@ -212,23 +306,34 @@ export default function App() {
 
       await connection.invoke(
         "SendMessage",
+        clientMessageId,
         cleanText
       );
 
-      setText("");
+      await removeQueuedMessage(
+        clientMessageId
+      );
     } catch (err) {
       console.error(err);
-      setError("Message could not be sent.");
+
+      setError(
+        "Connection interrupted. Your message is queued and will retry automatically."
+      );
     }
   }
 
   if (!loggedIn) {
     return (
       <main className="landing">
-        <div className="grain" aria-hidden="true" />
+        <div
+          className="grain"
+          aria-hidden="true"
+        />
 
         <section className="welcome-card">
-          <div className="monogram">JMO</div>
+          <div className="monogram">
+            JMO
+          </div>
 
           <p className="eyebrow">
             A private cinematic corner
@@ -239,14 +344,16 @@ export default function App() {
           <div className="title-line" />
 
           <p className="subtitle">
-            A private place for two — wrapped in a dark,
-            elegant aesthetic inspired by the cinematic
-            style of Jenna Marie Ortega.
+            A private place for two — wrapped
+            in a dark, elegant aesthetic
+            inspired by the cinematic style
+            of Jenna Marie Ortega.
           </p>
 
           <div className="quote">
             <span>“</span>
-            Two people. One little corner of the internet.
+            Two people. One little corner of
+            the internet.
             <span>”</span>
           </div>
 
@@ -290,12 +397,14 @@ export default function App() {
           </form>
 
           {error && (
-            <p className="error">{error}</p>
+            <p className="error">
+              {error}
+            </p>
           )}
 
           <p className="development-note">
-            Private Stage 1 build · Authenticated chat ·
-            Weak-network features coming next
+            Private Stage 2 build ·
+            Weak-network protection
           </p>
         </section>
       </main>
@@ -304,7 +413,10 @@ export default function App() {
 
   return (
     <main className="chat-page">
-      <div className="grain" aria-hidden="true" />
+      <div
+        className="grain"
+        aria-hidden="true"
+      />
 
       <section className="chat-shell">
         <header className="chat-header">
@@ -318,14 +430,17 @@ export default function App() {
                 Private room · for two
               </p>
 
-              <h1>Our Little Corner</h1>
+              <h1>
+                Our Little Corner
+              </h1>
             </div>
           </div>
 
           <div className="connection">
             <span
               className={`status-dot ${
-                connectionStatus === "Connected"
+                connectionStatus ===
+                "Connected"
                   ? "online"
                   : ""
               }`}
@@ -350,7 +465,9 @@ export default function App() {
                 ✦
               </div>
 
-              <h2>The scene is yours</h2>
+              <h2>
+                The scene is yours
+              </h2>
 
               <p>
                 Start the conversation.
@@ -359,13 +476,16 @@ export default function App() {
           ) : (
             messages.map((message) => {
               const mine =
-                message.senderName === username;
+                message.senderName ===
+                username;
 
               return (
                 <div
                   key={message.messageId}
                   className={`message-row ${
-                    mine ? "mine" : "theirs"
+                    mine
+                      ? "mine"
+                      : "theirs"
                   }`}
                 >
                   <article className="message-bubble">
@@ -410,17 +530,11 @@ export default function App() {
             }
             placeholder="Write something..."
             maxLength={4000}
-            disabled={
-              connectionStatus !== "Connected"
-            }
           />
 
           <button
             type="submit"
-            disabled={
-              !text.trim() ||
-              connectionStatus !== "Connected"
-            }
+            disabled={!text.trim()}
             aria-label="Send message"
           >
             →
