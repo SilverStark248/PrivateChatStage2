@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using PrivateChat.API.Data;
@@ -5,6 +7,7 @@ using PrivateChat.API.Models;
 
 namespace PrivateChat.API.Hubs;
 
+[Authorize]
 public class ChatHub : Hub
 {
     private const string RoomId = "our-private-room";
@@ -29,22 +32,24 @@ public class ChatHub : Hub
             .ToListAsync();
     }
 
-    public async Task SendMessage(string senderName, string text)
+    public async Task SendMessage(string text)
     {
-        senderName = (senderName ?? string.Empty).Trim();
         text = (text ?? string.Empty).Trim();
-
-        if (string.IsNullOrWhiteSpace(senderName))
-            throw new HubException("A sender name is required.");
 
         if (string.IsNullOrWhiteSpace(text))
             return;
 
-        if (senderName.Length > 50)
-            throw new HubException("Sender name is too long.");
-
         if (text.Length > 4000)
             throw new HubException("Message is too long.");
+
+        var senderName =
+            Context.User?.FindFirstValue(ClaimTypes.Name);
+
+        if (string.IsNullOrWhiteSpace(senderName))
+        {
+            throw new HubException(
+                "Authenticated username could not be determined.");
+        }
 
         var message = new ChatMessage
         {
@@ -58,18 +63,26 @@ public class ChatHub : Hub
         _db.Messages.Add(message);
         await _db.SaveChangesAsync();
 
-        await Clients.Group(RoomId).SendAsync("ReceiveMessage", message);
+        await Clients.Group(RoomId)
+            .SendAsync("ReceiveMessage", message);
     }
 
     public override async Task OnConnectedAsync()
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, RoomId);
+        await Groups.AddToGroupAsync(
+            Context.ConnectionId,
+            RoomId);
+
         await base.OnConnectedAsync();
     }
 
-    public override async Task OnDisconnectedAsync(Exception? exception)
+    public override async Task OnDisconnectedAsync(
+        Exception? exception)
     {
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, RoomId);
+        await Groups.RemoveFromGroupAsync(
+            Context.ConnectionId,
+            RoomId);
+
         await base.OnDisconnectedAsync(exception);
     }
 }
