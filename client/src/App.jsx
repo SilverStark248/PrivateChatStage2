@@ -8,7 +8,8 @@ import {
 import {
   enqueueMessage,
   getQueuedMessages,
-  removeQueuedMessage
+  removeQueuedMessage,
+  updateQueuedMessage
 } from "./messageQueue";
 
 const API_BASE = "https://privatechatstage2.onrender.com";
@@ -22,10 +23,20 @@ function formatTime(value) {
 }
 
 export default function App() {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(
+    () =>
+    sessionStorage.getItem(
+      "private_chat_username"
+    ) || ""
+  );
   const [password, setPassword] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [accessToken, setAccessToken] = useState(
+    () => sessionStorage.getItem("private_chat_token") || ""
+  );
+  
+  const [loggedIn, setLoggedIn] = useState(
+    () => !!sessionStorage.getItem("private_chat_token")
+  );
 
   const [text, setText] = useState("");
   const [messages, setMessages] = useState([]);
@@ -48,6 +59,25 @@ export default function App() {
 
     for (const queuedMessage of queuedMessages) {
       try {
+        setMessages((current) =>
+          current.map((message) =>
+            message.messageId ===
+            queuedMessage.clientMessageId
+              ? {
+                  ...message,
+                  deliveryStatus: "sending"
+                }
+              : message
+          )
+        );
+
+        await updateQueuedMessage(
+          queuedMessage.clientMessageId,
+          {
+            status: "sending"
+          }
+        );
+
         await connection.invoke(
           "SendMessage",
           queuedMessage.clientMessageId,
@@ -57,10 +87,41 @@ export default function App() {
         await removeQueuedMessage(
           queuedMessage.clientMessageId
         );
+
+        setMessages((current) =>
+          current.map((message) =>
+            message.messageId ===
+            queuedMessage.clientMessageId
+              ? {
+                  ...message,
+                  deliveryStatus: "sent"
+                }
+              : message
+          )
+        );
       } catch (err) {
         console.error(
           "Queued message could not be sent:",
           err
+        );
+
+        await updateQueuedMessage(
+          queuedMessage.clientMessageId,
+          {
+            status: "queued"
+          }
+        ).catch(() => {});
+
+        setMessages((current) =>
+          current.map((message) =>
+            message.messageId ===
+            queuedMessage.clientMessageId
+              ? {
+                  ...message,
+                  deliveryStatus: "queued"
+                }
+              : message
+          )
         );
 
         break;
@@ -68,8 +129,63 @@ export default function App() {
     }
   }
 
+  async function loadHistory(connection) {
+    try {
+      const history = await connection.invoke(
+        "GetHistory",
+        100
+      );
+
+      const queuedMessages =
+        await getQueuedMessages();
+
+      const localQueuedMessages =
+        queuedMessages.map((message) => ({
+          messageId:
+            message.clientMessageId,
+          roomId: "our-private-room",
+          senderName: username,
+          text: message.text,
+          sentAtUtc: new Date(
+            message.createdAt
+          ).toISOString(),
+          deliveryStatus:
+            message.status === "sending"
+              ? "sending"
+              : "queued"
+        }));
+
+      const historyIds = new Set(
+        history.map(
+          (message) => message.messageId
+        )
+      );
+
+      const stillQueued =
+        localQueuedMessages.filter(
+          (message) =>
+            !historyIds.has(
+              message.messageId
+            )
+        );
+
+      setMessages([
+        ...history,
+        ...stillQueued
+      ]);
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        "Could not load message history."
+      );
+    }
+  }
+
   useEffect(() => {
-    if (!loggedIn || !accessToken) return;
+    if (!loggedIn || !accessToken) {
+      return;
+    }
 
     let connection;
 
@@ -103,20 +219,24 @@ export default function App() {
         setConnectionStatus("Disconnected");
       });
 
-      connection.on("ReceiveMessage", (message) => {
-        setMessages((current) => {
-          if (
-            current.some(
-              (item) =>
-                item.messageId === message.messageId
-            )
-          ) {
-            return current;
-          }
+      connection.on(
+        "ReceiveMessage",
+        (message) => {
+          setMessages((current) => {
+            if (
+              current.some(
+                (item) =>
+                  item.messageId ===
+                  message.messageId
+              )
+            ) {
+              return current;
+            }
 
-          return [...current, message];
-        });
-      });
+            return [...current, message];
+          });
+        }
+      );
 
       connectionRef.current = connection;
 
@@ -132,7 +252,9 @@ export default function App() {
       } catch (err) {
         console.error(err);
 
-        setConnectionStatus("Connection failed");
+        setConnectionStatus(
+          "Connection failed"
+        );
 
         setError(
           "Could not connect to the private chat server."
@@ -156,23 +278,6 @@ export default function App() {
       behavior: "smooth"
     });
   }, [messages]);
-
-  async function loadHistory(connection) {
-    try {
-      const history = await connection.invoke(
-        "GetHistory",
-        100
-      );
-
-      setMessages(history);
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        "Could not load message history."
-      );
-    }
-  }
 
   async function login(event) {
     event.preventDefault();
@@ -218,13 +323,24 @@ export default function App() {
       setUsername(
         data.username || cleanUsername
       );
-
+      
       setPassword("");
+      
+      sessionStorage.setItem(
+        "private_chat_token",
+        data.token
+      );
+      
+      sessionStorage.setItem(
+        "private_chat_username",
+        data.username || cleanUsername
+      );
+      
       setAccessToken(data.token);
       setLoggedIn(true);
-    } catch (err) {
+    }
+    catch (err) {
       console.error(err);
-
       setError(
         "Could not reach the private chat server."
       );
@@ -233,15 +349,24 @@ export default function App() {
 
   async function logout() {
     const connection = connectionRef.current;
-
+    
     if (connection) {
       await connection.stop();
     }
-
+    
     connectionRef.current = null;
-
+    
+    sessionStorage.removeItem(
+      "private_chat_token"
+    );
+    
+    sessionStorage.removeItem(
+      "private_chat_username"
+    );
+    
     setAccessToken("");
     setLoggedIn(false);
+    setUsername("");
     setPassword("");
     setMessages([]);
     setText("");
@@ -254,7 +379,9 @@ export default function App() {
 
     const cleanText = text.trim();
 
-    if (!cleanText) return;
+    if (!cleanText) {
+      return;
+    }
 
     const clientMessageId =
       crypto.randomUUID();
@@ -264,10 +391,6 @@ export default function App() {
       text: cleanText
     };
 
-    /*
-     * Save locally BEFORE attempting the network send.
-     * This is the key weak-network protection.
-     */
     try {
       await enqueueMessage(
         queuedMessage
@@ -285,7 +408,22 @@ export default function App() {
       return;
     }
 
+    const localMessage = {
+      messageId: clientMessageId,
+      roomId: "our-private-room",
+      senderName: username,
+      text: cleanText,
+      sentAtUtc: new Date().toISOString(),
+      deliveryStatus: "queued"
+    };
+
+    setMessages((current) => [
+      ...current,
+      localMessage
+    ]);
+
     setText("");
+    setError("");
 
     const connection = connectionRef.current;
 
@@ -301,25 +439,7 @@ export default function App() {
       return;
     }
 
-    try {
-      setError("");
-
-      await connection.invoke(
-        "SendMessage",
-        clientMessageId,
-        cleanText
-      );
-
-      await removeQueuedMessage(
-        clientMessageId
-      );
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        "Connection interrupted. Your message is queued and will retry automatically."
-      );
-    }
+    await flushQueue(connection);
   }
 
   if (!loggedIn) {
@@ -403,8 +523,8 @@ export default function App() {
           )}
 
           <p className="development-note">
-            Private Stage 2 build ·
-            Weak-network protection
+            Private Stage 2 build · Weak-network
+            protection
           </p>
         </section>
       </main>
@@ -500,6 +620,14 @@ export default function App() {
                     </div>
 
                     <time>
+                      {message.deliveryStatus ===
+                        "queued" &&
+                        "Queued · "}
+
+                      {message.deliveryStatus ===
+                        "sending" &&
+                        "Sending · "}
+
                       {formatTime(
                         message.sentAtUtc
                       )}
