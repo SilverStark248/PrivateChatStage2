@@ -46,16 +46,25 @@ export default function App() {
 
   const connectionRef = useRef(null);
   const bottomRef = useRef(null);
+  const flushInProgressRef = useRef(false);
 
   async function flushQueue(connection) {
-    if (
-      !connection ||
-      connection.state !== HubConnectionState.Connected
-    ) {
-      return;
-    }
+  if (
+    !connection ||
+    connection.state !== HubConnectionState.Connected
+  ) {
+    return;
+  }
 
-    const queuedMessages = await getQueuedMessages(username);
+  if (flushInProgressRef.current) {
+    return;
+  }
+
+  flushInProgressRef.current = true;
+
+  try {
+    const queuedMessages =
+      await getQueuedMessages(username);
 
     for (const queuedMessage of queuedMessages) {
       try {
@@ -121,11 +130,14 @@ export default function App() {
                   deliveryStatus: "queued"
                 }
               : message
-          )
-        );
-
-        break;
+            )
+          );
+          break;
+        }
       }
+    } 
+    finally {
+      flushInProgressRef.current = false;
     }
   }
 
